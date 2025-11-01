@@ -1,0 +1,172 @@
+services:
+  # Redis service for caching and state management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+
+  # ChromaDB service for vector storage
+  chromadb:
+    build:
+      context: ./services/chromadb
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8056:8056"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - data_volume:/app/data
+      - chroma_data:/app/chroma_data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+
+  # Speech processing service (Whisper STT)
+  speech-processing:
+    build:
+      context: ./services/speech_processing
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8081:8081"  # Changed to match Dockerfile EXPOSE
+    environment:
+      - REDIS_HOST=redis
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8056
+    volumes:
+      - data_volume:/app/data
+    # devices:
+    #   - "/dev/snd:/dev/snd"  # For audio devices if needed - commented out due to error
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  # Data transformation service
+  data-transformation:
+    build:
+      context: ./services/data_transformation
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "5002:5000"
+    environment:
+      - REDIS_HOST=redis
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8056
+      - FLASK_APP=transform_data.py
+      - FLASK_ENV=production
+    volumes:
+      - data_volume:/app/data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - chromadb
+
+  # Bot management service
+  bot-management:
+    build:
+      context: ./services/bot_management
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "5003:5000"
+    environment:
+      - REDIS_HOST=redis
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8056
+      - SPEECH_PROCESSING_HOST=speech-processing
+      - SPEECH_PROCESSING_PORT=8081
+      - BOT_CONFIG=/app/config/bot_config.json
+    volumes:
+      - data_volume:/app/data
+      - config_volume:/app/config
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - chromadb
+      - speech-processing
+
+  # External media (RTP receiver)
+  external-media:
+    build:
+      context: ./services/external_media
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8766:8766/udp"  # Added UDP for RTP
+      - "8766:8766/tcp"  # Added TCP for control
+    environment:
+      - REDIS_HOST=redis
+      - SPEECH_PROCESSING_HOST=speech-processing
+      - SPEECH_PROCESSING_PORT=8081
+      - RTP_IP=0.0.0.0
+      - RTP_PORT=8766
+    volumes:
+      - data_volume:/app/data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - speech-processing
+
+  # ARI (Asterisk REST Interface) service
+  ari:
+    build:
+      context: ./services/ari
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"
+    environment:
+      - ARI_URL=http://asterisk:8088  # Changed to service name
+      - ARI_USERNAME=${ARI_USERNAME:-myuser}
+      - ARI_PASSWORD=${ARI_PASSWORD:-mypassword}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SPEECH_PROCESSING_HOST=speech-processing
+      - SPEECH_PROCESSING_PORT=8081
+      - EXTERNAL_MEDIA_HOST=external-media
+      - EXTERNAL_MEDIA_PORT=8766
+      - BOT_MANAGEMENT_HOST=bot-management
+      - BOT_MANAGEMENT_PORT=5000
+    volumes:
+      - data_volume:/app/data
+      - config_volume:/app/config
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - speech-processing
+      - external-media
+      - bot-management
+
+volumes:
+  data_volume:
+  config_volume:
+  redis_data:
+  chroma_data:
+
+networks:
+  novaia-network:
+    driver: bridge

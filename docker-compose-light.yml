@@ -1,0 +1,88 @@
+services:
+  # Redis service for caching and state management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+
+  # ChromaDB service for vector storage
+  chromadb:
+    build:
+      context: ./services/chromadb
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8056:8056"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - data_volume:/app/data
+      - chroma_data:/app/chroma_data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+
+  # Data transformation service
+  data-transformation:
+    build:
+      context: ./services/data_transformation
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "5002:5000"
+    environment:
+      - REDIS_HOST=redis
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8056
+      - FLASK_APP=transform_data.py
+      - FLASK_ENV=production
+    volumes:
+      - data_volume:/app/data
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - chromadb
+
+  # Bot management service
+  bot-management:
+    build:
+      context: ./services/bot_management
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "5003:5000"
+    environment:
+      - REDIS_HOST=redis
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8056
+      - BOT_CONFIG=/app/config/bot_config.json
+    volumes:
+      - data_volume:/app/data
+      - config_volume:/app/config
+    networks:
+      - novaia-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - chromadb
+
+volumes:
+  data_volume:
+  config_volume:
+  redis_data:
+  chroma_data:
+
+networks:
+  novaia-network:
+    driver: bridge
